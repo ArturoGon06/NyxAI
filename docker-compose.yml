@@ -1,0 +1,20 @@
+services:
+  nyxai:
+    build:
+      context: .
+    ports:
+      - "${NYXAI_PORT:-8000}:${NYXAI_PORT:-8000}"
+    environment:
+      NYXAI_PORT: "${NYXAI_PORT:-8000}"
+      NYXAI_DATABASE_URL: "${NYXAI_DATABASE_URL:-/data/nyxai.db}"
+      NYXAI_ASSET_DIR: "${NYXAI_ASSET_DIR:-/data/avatars}"
+      OLLAMA_BASE_URL: "${OLLAMA_BASE_URL:-http://localhost:11434}"
+      A1111_BASE_URL: "${A1111_BASE_URL:-http://localhost:7860}"
+      NYXAI_IMAGE_DIR: "${NYXAI_IMAGE_DIR:-/data/images}"
+    volumes:
+      - nyxai_data:/data
+    init: true
+    restart: unless-stopped
+
+volumes:
+  nyxai_data:

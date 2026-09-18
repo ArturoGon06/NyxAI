@@ -1,0 +1,19 @@
+{
+  "name": "NyxAI",
+  "short_name": "NyxAI",
+  "description": "A self-hosted, local-first roleplay chat with Ollama.",
+  "id": "/",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#08080B",
+  "theme_color": "#08080B",
+  "icons": [
+    {
+      "src": "/icons/nyxai.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}

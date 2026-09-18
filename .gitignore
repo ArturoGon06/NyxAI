@@ -1,0 +1,8 @@
+/target/
+/target-*/
+/data/
+/.validation*/
+/.env
+*.db
+*.db-shm
+*.db-wal

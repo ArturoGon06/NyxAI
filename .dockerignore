@@ -1,0 +1,10 @@
+.git
+.gitignore
+target
+data
+.env
+*.db
+*.db-shm
+*.db-wal
+nyxai_project_spec.md
+nyxai_codex_milestone_1_prompt.md
