@@ -201,6 +201,37 @@ $env:OLLAMA_BASE_URL = "http://192.168.1.100:11434"
 cargo run --release
 ```
 
+### Linux setup helper (NyxAI + local A1111)
+
+For an x86_64 Linux desktop with an NVIDIA driver already installed, the repository includes a conservative setup helper for a native NyxAI build and [the official AUTOMATIC1111 WebUI repository](https://github.com/AUTOMATIC1111/stable-diffusion-webui). It supports `apt`, `dnf`, and `pacman` package systems; the A1111 portion follows the upstream Linux flow (install dependencies, clone the repository, configure `webui-user.sh`, then run `webui.sh`).
+
+```bash
+git clone https://github.com/ArturoGon06/NyxAI.git
+cd NyxAI
+bash scripts/setup-linux.sh --install-prereqs
+```
+
+The helper checks for an NVIDIA driver with `nvidia-smi`, requires at least **35 GiB** free on the A1111 install filesystem, requires an A1111-compatible Python 3.10 or 3.11, builds NyxAI with Rust, and installs/reuses A1111 at `~/AI/stable-diffusion-webui` by default. It never installs or changes NVIDIA drivers, configures startup services, updates an existing A1111 checkout, or overwrites an existing `webui-user.sh`.
+
+No checkpoint is downloaded by default because model sources and licenses vary. Reuse a checkpoint already in `~/AI/stable-diffusion-webui/models/Stable-diffusion`, place one there after reviewing its license, or explicitly supply one direct HTTPS URL:
+
+```bash
+bash scripts/setup-linux.sh --install-prereqs \
+  --model-url 'https://model-host.example/path/model.safetensors'
+```
+
+The new A1111 `webui-user.sh` uses `--api --port 7860` only. It deliberately does **not** add `--listen`, `--share`, or a tunnel flag, leaving A1111 at `http://127.0.0.1:7860` for local use. Start it after setup with `cd ~/AI/stable-diffusion-webui && ./webui.sh`; its first launch creates the isolated environment and downloads its Python dependencies. Then start NyxAI natively on the same host:
+
+```bash
+A1111_BASE_URL=http://127.0.0.1:7860 \
+OLLAMA_BASE_URL=http://127.0.0.1:11434 \
+./target/release/nyxai
+```
+
+In NyxAI, open **Settings → Image Generation**, enable it, then use **Test connection** and **Refresh models**. Once A1111 is running, its local API can be checked with `curl --fail --silent http://127.0.0.1:7860/sdapi/v1/sd-models`.
+
+For this loopback-only design, use the native NyxAI process above. A NyxAI Docker container's `localhost` is the container, not the Linux host, and it cannot reach a host service that is intentionally bound only to `127.0.0.1`. Do not expose A1111 with `--listen` or `--share` simply to work around that boundary; if you later need Docker, use a deliberately reviewed private networking configuration.
+
 ## Docker Compose
 
 NyxAI deliberately does not bundle Ollama:
