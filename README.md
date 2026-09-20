@@ -1,42 +1,45 @@
 # NyxAI
 
-NyxAI is a self-hosted, mobile-first web interface for local AI backends and characters. It is designed for a private LAN or Tailscale network. Ollama is the first provider; NyxAI does not run models itself.
+NyxAI is a self-hosted, mobile-first web interface for local AI backends and characters. It is designed for a private LAN or Tailscale network. It supports Ollama and private OpenAI-compatible local servers; NyxAI does not run models itself.
 
 ## Current status
 
-Milestones 1–13 are implemented:
+Milestones 1–14 are implemented:
 
 - Responsive Rust/Axum web application with SQLite settings, appearance preferences, Docker deployment, and a phone-first chat shell.
-- Configurable Ollama connection, model discovery/selection, persisted generation controls, server-side streaming responses, and Stop generation.
+- Configurable Ollama or OpenAI-compatible local text backends, model discovery/manual selection, persisted generation controls, server-side streaming responses, and Stop generation.
 - Persistent character CRUD: creation, editing, duplication, confirmed deletion, avatars, tags, and a real database-backed sidebar.
-- Persistent character chats: multiple independent conversations per character, SQLite-backed messages, character-aware Ollama prompting, streaming response saves, cancellation-safe partial responses, chat rename, and confirmed chat deletion.
+- Persistent character chats: multiple independent conversations per character, SQLite-backed messages, character-aware local-provider prompting, streaming response saves, cancellation-safe partial responses, chat rename, and confirmed chat deletion.
 - Final phone-first character/chat navigation: independently expandable character groups, nested persisted chats, per-chat action menus, active-chat affordances, and an independently scrolling mobile drawer.
 - Character-card import for JSON and supported PNG metadata, centralized normalization into NyxAI characters, editable creator notes, and selectable alternate greetings for new chats.
 - Persisted, live-previewed chat appearance controls with the NyxAI default palette, plus safe render-time roleplay formatting for actions and dialogue.
 - First-class personas, per-chat persona selection, default-persona support, and dynamic `{{char}}` / `{{user}}` resolution at prompt and greeting time.
 - PWA metadata, a privacy-safe offline shell, a responsive multiline composer, server-unavailable feedback, health checks, and Docker production polish.
-- A local AI Character Creator that turns a natural-language idea into a reviewable, editable character draft through the configured Ollama model—without saving anything until you explicitly use the normal character save flow.
+- A local AI Character Creator that turns a natural-language idea into a reviewable, editable character draft through the configured text backend—without saving anything until you explicitly use the normal character save flow.
 - Local A1111-compatible text-to-image generation for reviewable character-avatar candidates and optional persisted in-chat scene images, with an independent image-model setting and safe local file storage.
 - Local, deterministic Lorebooks / World Info: reusable trigger-key entries can be attached to characters or individual chats and are included in context only when relevant.
-- Local Semantic Memory / RAG: concise durable facts are extracted with a local text model, embedded through Ollama, stored in SQLite, and retrieved with local cosine similarity for the active character and chat only.
+- Local Semantic Memory / RAG: concise durable facts are extracted with a local text model, embedded through an independently selected local backend, stored in SQLite, and retrieved with local cosine similarity for the active character and chat only.
+- A capability-oriented local inference registry keeps Ollama isolated while adding an OpenAI-compatible HTTP adapter for private llama.cpp, vLLM, and similar servers. Text generation and embeddings can use different configured backends.
 
 Card export and search are intentionally not part of this release.
 
 ## Architecture
 
-The browser communicates with NyxAI's HTTP routes. Ollama-specific behavior remains isolated:
+The browser communicates with NyxAI's HTTP routes. Backend-specific behavior remains isolated behind one provider service:
 
 ```text
-Browser UI -> NyxAI routes -> prompt builder -> ProviderService -> OllamaProvider -> Ollama API
+Browser UI -> NyxAI routes -> prompt builder -> ProviderService -> Backend Registry
+                                                                  |-> Ollama adapter -> Ollama API
+                                                                  `-> OpenAI-compatible adapter -> local HTTP API
 ```
 
-Characters, personas, and chats follow the same separation: normalized domain models and prompt construction are in `src/domain`, SQLite records and avatar file handling are in `src/storage`, and `src/app/routes.rs` owns the HTTP boundary. The UI does not access SQLite or Ollama directly.
+Characters, personas, and chats follow the same separation: normalized domain models and prompt construction are in `src/domain`, SQLite records and avatar file handling are in `src/storage`, and `src/app/routes.rs` owns the HTTP boundary. The UI does not access SQLite or inference backends directly.
 
 ## Semantic Memory
 
 Semantic Memory is a local, embedding-based complement to deterministic Lorebooks. Lorebooks inject explicit world facts when keys match; Semantic Memory recalls concise, durable facts from a specific conversation, such as a promise, a revealed preference, a relationship change, or an important event. It is not cloud RAG, a vector-database service, full transcript search, or a replacement for character context.
 
-Open **Settings → Semantic Memory**, enable it, and select an installed Ollama **Embedding model**. This model is required because chat models are not silently used for embeddings. Choose an optional **Extraction model**; if it is empty, NyxAI uses the Character Creator Model and then the selected chat model as a local fallback. The settings also control automatic extraction (default: every 8 new messages), the number of retrieved memories, similarity threshold, and a conservative estimated-token budget.
+Open **Settings → Semantic Memory**, enable it, select an **Embedding backend**, then choose or enter its local **Embedding model**. This model is required because chat models are not silently used for embeddings. It can remain Ollama even when text generation uses an OpenAI-compatible local server. Choose an optional **Extraction model**; if it is empty, NyxAI uses the Character Creator Model and then the selected chat model as a local fallback. The settings also control automatic extraction (default: every 8 new messages), the number of retrieved memories, similarity threshold, and a conservative estimated-token budget.
 
 After an assistant response finishes, NyxAI may asynchronously inspect a bounded batch of the newest unprocessed messages. A local text model returns JSON facts; NyxAI validates, de-duplicates, embeds, and saves only concise candidates. Extraction never delays streamed chat output and is skipped while another local AI task owns the text/image resource. Use **Chat actions → Extract memories now** to process a chat on demand. The **Manage memories** sheet supports creating, editing, deleting, and promoting a fact from **This chat only** to **All chats for this character**.
 
@@ -99,7 +102,7 @@ The editor’s collapsed **Greetings** section preserves, adds, edits, and remov
 
 From **Manage characters**, choose the moon-shaped **Generate Character with AI** control. Describe the character in ordinary language, choose an optional local creator-model override, set the requested alternate-greeting count (0–10; 3 by default), and select **Generate draft**. NyxAI asks the configured local provider for a structured `CharacterDraft`, then opens the normal character editor with the result. Nothing is written to SQLite during this step: review or edit every field and use the editor's usual **Save character** action to persist it.
 
-Set a dedicated **Character Creator Model** in **Settings** when you want character drafting to use a different locally installed model. If it is unset, NyxAI falls back to the globally selected chat model. The generator dialog can also use a one-time available-model override without changing the saved setting. Model discovery and all generation continue through NyxAI's provider service, so no extra Ollama client or cloud service is introduced.
+Set a dedicated **Character Creator Model** in **Settings** when you want character drafting to use a different locally installed model. If it is unset, NyxAI falls back to the globally selected chat model. The generator dialog can also use a one-time available-model override without changing the saved setting. Model discovery and all generation continue through NyxAI's provider service, so no extra backend client or cloud service is introduced.
 
 Generated drafts keep the original creation request only while the unsaved editor session is open. Small moon controls on generated fields can regenerate Description, Personality, Scenario, First Message, Alternate Greetings, Example Dialogue, System Prompt, or Tags. The request includes the current draft, the original idea, and an optional direction, but the server applies only the requested returned field—so manual edits elsewhere are retained. Generated and regenerated values remain normal character data: `{{char}}`, `{{user}}`, and unknown placeholders are stored literally and are resolved later by the existing chat template system.
 
@@ -157,13 +160,17 @@ NyxAI v1.2 can generate images through an [AUTOMATIC1111-compatible API](https:/
 
 NyxAI first asks the local text provider for a concise visual prompt. It uses **Image Prompt Model**, then **Character Creator Model**, then the selected chat model. Avatar generation creates a reviewable candidate in the character editor; it is not associated with a character until the normal character save flow is used. From a chat action sheet, **Generate scene image** creates one optional visual from the active character, persona, scenario, and a small recent-history window. Scene-image metadata is stored in SQLite and generated image files are stored under the persistent image directory. Deleting a chat or character removes associated image metadata and files; deleting a single scene image is also available in the conversation.
 
-Image prompts and generated pixels stay on the configured private services. NyxAI does not add cloud image providers, image-to-image workflows, ControlNet, queues, galleries, or automatic message-image insertion. The optional **Single-GPU memory mode** makes best-effort requests to unload the active Ollama model before image generation, unload the A1111 checkpoint afterward, and restore the selected chat model when enabled. It serializes text and image generation in this NyxAI process; it cannot control other applications using the same GPU.
+Image prompts and generated pixels stay on the configured private services. NyxAI does not add cloud image providers, image-to-image workflows, ControlNet, queues, galleries, or automatic message-image insertion. The optional **Single-GPU memory mode** makes best-effort requests to unload a lifecycle-capable text model before image generation, unload the A1111 checkpoint afterward, and restore the selected chat model when enabled. Ollama supports that lifecycle request; OpenAI-compatible servers are left running because no standard lifecycle endpoint exists. NyxAI logs this graceful skip and never pretends it unloaded a model. It serializes text and image generation in this NyxAI process; it cannot control other applications using the same GPU.
 
-## Ollama configuration
+## Local text-backend configuration
 
-In **Settings**, enter an Ollama server URL, save it, test the connection, refresh available models, and select one. The saved Settings URL takes precedence over `OLLAMA_BASE_URL`; when nothing is saved, the environment value is used, falling back to `http://localhost:11434` for local development.
+In **Settings → Local backend**, choose **Ollama** or **OpenAI-Compatible Local Server**, enter its private URL, save it, test the connection, refresh available models, and select one. The chosen backend and model remain persisted in the existing settings record. Old settings deserialize as **Ollama**, so existing installs retain their current behavior.
 
-Ollama's documented [chat API](https://docs.ollama.com/api/chat), [model listing](https://docs.ollama.com/api/tags), and [streaming format](https://docs.ollama.com/api/streaming) are used server-side. NyxAI translates streaming chunks to server-sent events, incrementally updates the active assistant message, and aborts the upstream response when Stop is used.
+**Ollama** uses its documented [chat API](https://docs.ollama.com/api/chat), [model listing](https://docs.ollama.com/api/tags), streaming format, embeddings, and best-effort model lifecycle calls. **OpenAI-Compatible Local Server** uses `GET /v1/models`, `POST /v1/chat/completions` with SSE streaming, and `POST /v1/embeddings` against the URL you configure. It is intended for a local or private-network llama.cpp, vLLM, LM Studio-compatible, or similar server—not a hosted cloud endpoint.
+
+Some compatible servers do not implement model discovery. If `GET /models` returns unsupported, NyxAI still confirms the reachable server and allows a manual model identifier. Model names are validated against discovery where the backend supports that check; an unsupported discovery endpoint never blocks manual configuration. Stop always closes NyxAI's stream. It also interrupts Ollama's request; generic OpenAI-compatible servers may continue their server-side computation because the protocol has no portable cancel endpoint.
+
+All chat generation, Character Creator drafting/field regeneration, Semantic Memory extraction, and image-prompt generation use the selected text backend through `ProviderService`. Embeddings are independently selected in **Settings → Semantic Memory**, so they can remain on Ollama while another local server generates text.
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
@@ -171,14 +178,16 @@ Ollama's documented [chat API](https://docs.ollama.com/api/chat), [model listing
 | `NYXAI_DATABASE_URL` | `./data/nyxai.db` locally; `/data/nyxai.db` in Docker | SQLite file path or SQLx SQLite URL. |
 | `NYXAI_ASSET_DIR` | `./data/avatars` beside the local database; `/data/avatars` in Docker | Persistent character-avatar directory. |
 | `OLLAMA_BASE_URL` | `http://localhost:11434` | Fallback Ollama URL until a URL is saved in Settings. |
+| `OPENAI_COMPATIBLE_BASE_URL` | `http://localhost:8080/v1` | Fallback private OpenAI-compatible URL until a URL is saved in Settings. |
+| `OPENAI_COMPATIBLE_API_KEY` | unset | Optional server-side bearer token for the configured compatible backend. It is never sent to the browser or included in settings/API responses. |
 | `A1111_BASE_URL` | `http://localhost:7860` | Fallback A1111-compatible image API URL until a URL is saved in Settings. |
 | `NYXAI_IMAGE_DIR` | `./data/images` beside the local database; `/data/images` in Docker | Persistent generated scene-image directory. |
 
-The saved Ollama and A1111 URLs in **Settings** have priority over their corresponding environment fallbacks. The other variables are read at NyxAI startup. Use a persistent `/data` location for the database, avatars, and generated images; changing database locations does not migrate existing data automatically.
+The saved Ollama, OpenAI-compatible, and A1111 URLs in **Settings** have priority over their corresponding environment fallbacks. The active text backend defaults to Ollama, and the embedding backend separately defaults to Ollama. `OPENAI_COMPATIBLE_API_KEY` is intentionally environment-only and is read at NyxAI startup; it is not stored in SQLite. Use a persistent `/data` location for the database, avatars, and generated images; changing database locations does not migrate existing data automatically.
 
 ## PWA and mobile use
 
-NyxAI includes a web manifest, midnight/purple/gold icon, standalone display metadata, Apple home-screen metadata, and a small service worker. The service worker caches only the public application shell (HTML, CSS, JavaScript, manifest, and icon). It never caches `/api` responses, Ollama traffic, avatars, chats, settings, or other private data. When the shell is available but the NyxAI server cannot be reached, the app clearly reports that the server is unavailable rather than pretending chat is usable.
+NyxAI includes a web manifest, midnight/purple/gold icon, standalone display metadata, Apple home-screen metadata, and a small service worker. The service worker caches only the public application shell (HTML, CSS, JavaScript, manifest, and icon). It never caches `/api` responses, inference traffic, avatars, chats, settings, or other private data. When the shell is available but the NyxAI server cannot be reached, the app clearly reports that the server is unavailable rather than pretending chat is usable.
 
 On supported browsers, use the browser's **Install app** or **Add to Home Screen** action. Service workers and Chromium-style PWA installation require a secure context: `https://` or browser-recognized localhost. Private Tailscale/LAN HTTP remains supported for normal web use, but may not offer the install prompt until you provide HTTPS through your own private setup. NyxAI does not manage certificates.
 
@@ -186,7 +195,7 @@ The chat composer grows for multiline messages up to a comfortable limit. On a d
 
 ## Run locally
 
-Requirements: Rust 1.82 or newer, plus an Ollama server and downloaded model when using generation.
+Requirements: Rust 1.82 or newer, plus a configured local text server and model when using generation.
 
 ```bash
 cargo run --release
@@ -234,13 +243,13 @@ For this loopback-only design, use the native NyxAI process above. A NyxAI Docke
 
 ## Docker Compose
 
-NyxAI deliberately does not bundle Ollama:
+NyxAI deliberately does not bundle a text backend:
 
 ```bash
 docker compose up --build
 ```
 
-Copy `.env.example` to `.env` to configure the port, database, avatar/image directories, Ollama URL, and A1111 URL. SQLite, avatars, and generated images persist in the `nyxai_data` named volume. The runtime image is multi-stage, runs as a non-root `nyxai` user, uses a small init process in Compose, and reports healthy when its own `GET /api/health` endpoint returns `{ "status": "ok" }`. Health does not depend on Ollama or A1111: NyxAI is alive even if either provider is temporarily offline.
+Copy `.env.example` to `.env` to configure the port, database, avatar/image directories, local text backend URLs, optional compatible-server token, and A1111 URL. SQLite, avatars, and generated images persist in the `nyxai_data` named volume. The runtime image is multi-stage, runs as a non-root `nyxai` user, uses a small init process in Compose, and reports healthy when its own `GET /api/health` endpoint returns `{ "status": "ok" }`. Health does not depend on any text or image backend: NyxAI is alive even if a provider is temporarily offline.
 
 For networking:
 
@@ -249,23 +258,23 @@ For networking:
 3. **Separate Docker containers:** connect both to the same user-defined network and use the Ollama service name, such as `http://ollama:11434`.
 4. **NyxAI in Docker, Ollama on the Linux host:** container `localhost` is not the host. Explicitly map `host.docker.internal:host-gateway`, use that address, and ensure Ollama is reachable from Docker.
 
-Use the same private-network patterns for A1111, substituting port `7860`. Do not expose Ollama or A1111 directly to the public internet.
+Use the same private-network patterns for an OpenAI-compatible local server (often port `8080` with a `/v1` path) and A1111 (port `7860`). Do not expose Ollama, an OpenAI-compatible server, or A1111 directly to the public internet. If a compatible server needs a bearer token, set `OPENAI_COMPATIBLE_API_KEY` only in the NyxAI server/container environment; never put it in a browser URL or character data.
 
-Do not expose Ollama directly to the public internet.
+Do not expose any local inference backend directly to the public internet.
 
 For a Docker-managed named volume, the image prepares `/data` for the non-root runtime user. If you replace it with a host bind mount, ensure that the host directory is writable by the container user or use your deployment's normal ownership policy.
 
 ## Tailscale and private access
 
-NyxAI has no Tailscale dependency. Run it on a machine already connected to your Tailnet, then browse to `http://TAILSCALE_HOSTNAME:8000` or the machine's Tailscale IP. No public port forwarding is required. Keep Ollama on the host, LAN, or Tailnet and configure its private URL in NyxAI; do not publish Ollama to the internet.
+NyxAI has no Tailscale dependency. Run it on a machine already connected to your Tailnet, then browse to `http://TAILSCALE_HOSTNAME:8000` or the machine's Tailscale IP. No public port forwarding is required. Keep Ollama or an OpenAI-compatible text server on the host, LAN, or Tailnet and configure its private URL in NyxAI; do not publish an inference backend to the internet.
 
 ## Troubleshooting
 
-- **NyxAI cannot connect to Ollama:** confirm the URL in Settings, verify Ollama is running, then use **Test connection**. In Docker, `localhost` means the NyxAI container—not the host.
-- **No models appear:** NyxAI reached Ollama, but Ollama has no installed models or the selected model was removed. Pull a model with Ollama, then use **Refresh models**.
+- **NyxAI cannot connect to a text backend:** confirm the selected backend and URL in Settings, verify the local server is running, then use **Test connection**. In Docker, `localhost` means the NyxAI container—not the host.
+- **No models appear:** Ollama may have no installed models, or a compatible server may not expose `GET /models`. Pull/select an Ollama model, or enter the compatible server's exact local model identifier manually and save it.
 - **NyxAI cannot connect to A1111:** verify the image server URL and ensure its API mode is enabled (AUTOMATIC1111 normally needs `--api`). In Docker, `localhost` means the NyxAI container; use a reachable LAN/Tailscale address or explicit host gateway mapping.
 - **No image checkpoints appear:** NyxAI may still be able to use the backend default checkpoint. Refresh models after the backend has finished loading, or choose no explicit Image Model.
-- **Docker cannot reach host Ollama on Linux:** configure a reachable host/LAN/Tailscale address, or explicitly map `host.docker.internal:host-gateway` and use that hostname. Docker does not add that mapping automatically on every Linux installation.
+- **Docker cannot reach a host text backend on Linux:** configure a reachable host/LAN/Tailscale address, or explicitly map `host.docker.internal:host-gateway` and use that hostname. Docker does not add that mapping automatically on every Linux installation.
 - **A PNG card has no metadata:** only supported PNG `chara` text metadata is accepted. A normal PNG can still be used as a character avatar after you create or import the character.
 - **PWA install is unavailable:** use a supported browser in HTTPS or localhost context. Private HTTP can serve NyxAI but browsers may disable service workers and installation there.
 - **A Tailscale hostname is unreachable:** verify both devices are connected to the same Tailnet, use the correct NyxAI port, and check the host firewall.
@@ -288,7 +297,9 @@ Import check: choose **Import**, first try a JSON card containing only `name`, t
 
 For a sidebar check: create three characters and multiple chats beneath two of them. Open the drawer, expand several character rows independently, and confirm that tapping a character only toggles its nested list. Tap a chat to open it and verify the drawer closes and its Current marker appears. Use **New Chat**, per-chat overflow actions, character actions, and the empty-state Create Character control. Verify long names truncate instead of moving overflow controls off-screen.
 
-For Ollama: configure Settings, test the server, refresh/select a model, send a message in an open character chat, and use Stop during a longer response. The selected model and generation settings are global settings that persist independently of chats.
+For a text backend: configure Settings, test the server, refresh/select (or, for a compatible server without discovery, manually enter) a model, send a message in an open character chat, and use Stop during a longer response. The selected model and generation settings are global settings that persist independently of chats.
+
+Multi-backend check: first leave the saved settings on **Ollama**, confirm an existing character chat, Character Creator generation, image-prompt generation, and Semantic Memory extraction continue working. Then choose **OpenAI-Compatible Local Server**, enter a private `/v1` URL, test it, refresh models, and select one. If its `GET /models` endpoint is unavailable, enter the server's model identifier manually and save it. Confirm a chat streams normally, Character Creator and field regeneration use the same backend, and image-prompt generation still works. Finally, set Semantic Memory's **Embedding backend** back to Ollama with its embedding model, save, and verify memory retrieval/extraction remains independent of the active text backend. No browser response should contain `OPENAI_COMPATIBLE_API_KEY`.
 
 Persona check: create **Arturo** and **Aldric** in Settings → Manage personas, make Arturo the default, and create two chats for a character whose greeting or prompt contains `{{char}}` and `{{user}}`. Start the first with Arturo and choose Aldric in the second new-chat sheet. Each chat should preserve its own persona after restart and resolve the placeholders differently, while the character editor continues to show the original placeholders. Change one chat's persona from its chat action menu; only later generations should use the new persona. Delete a persona and confirm its chats remain while their headers show **Persona: User**.
 

@@ -10,7 +10,7 @@ use crate::{
             parse_memory_candidates, select_memory_context, MemoryDraft, ResolvedMemoryEntry,
         },
         persona::Persona,
-        settings::{AppSettings, GenerationSettings},
+        settings::{AppSettings, GenerationSettings, ProviderKind},
         template::TemplateContext,
     },
     storage::{
@@ -43,8 +43,8 @@ pub async fn retrieve_memories(
     let query_vector = state
         .providers
         .embed(
-            &settings.provider.active_provider,
-            &effective_ollama_url(settings, state),
+            &settings.memory.embedding_provider,
+            &effective_embedding_url(settings, state),
             model,
             &query,
         )
@@ -106,7 +106,7 @@ pub async fn extract_chat_memories(
         .take(EXTRACTION_MESSAGE_BATCH)
         .collect::<Vec<_>>();
     let generation = extraction_generation(&settings.generation);
-    let base_url = effective_ollama_url(settings, state);
+    let base_url = effective_text_url(settings, state);
     let output = state
         .providers
         .generate_text(
@@ -148,8 +148,8 @@ pub async fn extract_chat_memories(
         let vector = state
             .providers
             .embed(
-                &settings.provider.active_provider,
-                &base_url,
+                &settings.memory.embedding_provider,
+                &effective_embedding_url(settings, state),
                 embedding_model,
                 &candidate.content,
             )
@@ -195,7 +195,7 @@ pub async fn rebuild_memory_index(
         .context("Choose an Embedding Model before rebuilding the memory index.")?;
     let memories = list_memories_without_current_vector(&state.database, model).await?;
     let total = memories.len();
-    let base_url = effective_ollama_url(settings, state);
+    let base_url = effective_embedding_url(settings, state);
     let mut result = MemoryReindexResult {
         total,
         ..Default::default()
@@ -204,7 +204,7 @@ pub async fn rebuild_memory_index(
         match state
             .providers
             .embed(
-                &settings.provider.active_provider,
+                &settings.memory.embedding_provider,
                 &base_url,
                 model,
                 &memory.content,
@@ -229,12 +229,31 @@ pub async fn rebuild_memory_index(
     Ok(result)
 }
 
-pub fn effective_ollama_url(settings: &AppSettings, state: &AppState) -> String {
-    settings
-        .provider
-        .ollama_base_url
-        .clone()
-        .unwrap_or_else(|| state.default_ollama_base_url.clone())
+fn effective_provider_url(
+    settings: &AppSettings,
+    state: &AppState,
+    provider: &ProviderKind,
+) -> String {
+    match provider {
+        ProviderKind::Ollama => settings
+            .provider
+            .ollama_base_url
+            .clone()
+            .unwrap_or_else(|| state.default_ollama_base_url.clone()),
+        ProviderKind::OpenaiCompatible => settings
+            .provider
+            .openai_compatible_base_url
+            .clone()
+            .unwrap_or_else(|| state.default_openai_compatible_base_url.clone()),
+    }
+}
+
+fn effective_text_url(settings: &AppSettings, state: &AppState) -> String {
+    effective_provider_url(settings, state, &settings.provider.active_provider)
+}
+
+fn effective_embedding_url(settings: &AppSettings, state: &AppState) -> String {
+    effective_provider_url(settings, state, &settings.memory.embedding_provider)
 }
 
 fn extraction_generation(base: &GenerationSettings) -> GenerationSettings {

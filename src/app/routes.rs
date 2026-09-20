@@ -29,7 +29,7 @@ use crate::{
         memory::{MemoryDraft, MemoryEntry},
         persona::{Persona, PersonaDraft},
         prompt::build_chat_request_with_context,
-        settings::AppSettings,
+        settings::{AppSettings, ProviderKind},
         template::{resolve_template, TemplateContext},
     },
     importer::parse_character_card,
@@ -72,19 +72,35 @@ pub fn router(state: AppState) -> Router {
                 .put(update_existing_memory)
                 .delete(delete_existing_memory),
         )
-        .route("/api/providers/ollama/test", post(test_ollama_connection))
+        .route("/api/providers/text/test", post(test_text_connection))
+        // Retain these v1.4 route aliases so an already-cached app shell can
+        // still reconnect after a server upgrade. They use the configured
+        // active text backend just like the current endpoints.
+        .route("/api/providers/ollama/test", post(test_text_connection))
         .route("/api/providers/a1111/test", post(test_a1111_connection))
         .route(
             "/api/providers/a1111/models",
             get(list_a1111_models).post(list_a1111_models),
         )
         .route(
+            "/api/providers/text/models",
+            get(list_text_models).post(list_text_models),
+        )
+        .route(
             "/api/providers/ollama/models",
-            get(list_ollama_models).post(list_ollama_models),
+            get(list_text_models).post(list_text_models),
+        )
+        .route(
+            "/api/providers/embeddings/models",
+            get(list_embedding_models).post(list_embedding_models),
+        )
+        .route(
+            "/api/providers/text/model",
+            axum::routing::put(select_text_model),
         )
         .route(
             "/api/providers/ollama/model",
-            axum::routing::put(select_ollama_model),
+            axum::routing::put(select_text_model),
         )
         .route(
             "/api/characters",
@@ -259,11 +275,11 @@ async fn update_settings(
     Ok(Json(settings_response(&settings, &state)))
 }
 
-async fn test_ollama_connection(
+async fn test_text_connection(
     State(state): State<AppState>,
 ) -> Result<Json<ConnectionTestResponse>, ApiError> {
     let settings = load_settings(&state.database).await?;
-    let base_url = effective_ollama_url(&settings, &state);
+    let base_url = effective_text_url(&settings, &state);
     let report = state
         .providers
         .test_connection(&settings.provider.active_provider, &base_url)
@@ -274,10 +290,10 @@ async fn test_ollama_connection(
         connected: report.connected,
         model_count: report.model_count,
         message: if report.model_count == 0 {
-            "Connected to Ollama. No models are installed yet.".to_owned()
+            "Connected to the configured local text backend. No models were discovered.".to_owned()
         } else {
             format!(
-                "Connected to Ollama. {} model(s) available.",
+                "Connected to the configured local text backend. {} model(s) available.",
                 report.model_count
             )
         },
@@ -325,11 +341,9 @@ async fn list_a1111_models(
     }))
 }
 
-async fn list_ollama_models(
-    State(state): State<AppState>,
-) -> Result<Json<ModelsResponse>, ApiError> {
+async fn list_text_models(State(state): State<AppState>) -> Result<Json<ModelsResponse>, ApiError> {
     let settings = load_settings(&state.database).await?;
-    let base_url = effective_ollama_url(&settings, &state);
+    let base_url = effective_text_url(&settings, &state);
     let models = state
         .providers
         .list_models(&settings.provider.active_provider, &base_url)
@@ -348,38 +362,78 @@ async fn list_ollama_models(
     }))
 }
 
-async fn select_ollama_model(
+async fn select_text_model(
     State(state): State<AppState>,
     Json(request): Json<SelectModelRequest>,
 ) -> Result<Json<ModelsResponse>, ApiError> {
     let model_name = request.model.trim();
     if model_name.is_empty() || model_name.chars().count() > 256 {
         return Err(ApiError::bad_request(anyhow::anyhow!(
-            "Choose a valid Ollama model."
+            "Choose a valid local model identifier."
         )));
     }
 
     let mut settings = load_settings(&state.database).await?;
-    let base_url = effective_ollama_url(&settings, &state);
-    let models = state
+    let base_url = effective_text_url(&settings, &state);
+    // Discovery is optional for compatible local servers. Keep Ollama's
+    // installed-model validation, while allowing an explicit identifier only
+    // when the active adapter advertises manual entry as a fallback.
+    let capabilities = state
+        .providers
+        .capabilities(&settings.provider.active_provider);
+    let models = match state
         .providers
         .list_models(&settings.provider.active_provider, &base_url)
         .await
-        .map_err(ApiError::provider)?;
+    {
+        Ok(models) => models,
+        Err(crate::providers::ProviderError::UnsupportedCapability("model discovery"))
+            if capabilities.manual_model_entry =>
+        {
+            Vec::new()
+        }
+        Err(error) => return Err(ApiError::provider(error)),
+    };
 
-    if !models.iter().any(|model| model.name == model_name) {
+    if !capabilities.manual_model_entry && !models.iter().any(|model| model.name == model_name) {
         return Err(ApiError::bad_request(anyhow::anyhow!(
-            "That model is not currently available in Ollama. Refresh the list and choose another model."
+            "That model is not currently available in the configured backend. Refresh the list and choose another model."
         )));
     }
 
     settings.provider.selected_model = Some(model_name.to_owned());
     save_settings(&state.database, &settings).await?;
+    let selected_model_available =
+        models.is_empty() || models.iter().any(|model| model.name == model_name);
 
     Ok(Json(ModelsResponse {
         models,
         selected_model: settings.provider.selected_model,
-        selected_model_available: true,
+        selected_model_available,
+    }))
+}
+
+async fn list_embedding_models(
+    State(state): State<AppState>,
+) -> Result<Json<ModelsResponse>, ApiError> {
+    let settings = load_settings(&state.database).await?;
+    let models = state
+        .providers
+        .list_models(
+            &settings.memory.embedding_provider,
+            &effective_embedding_url(&settings, &state),
+        )
+        .await
+        .map_err(ApiError::provider)?;
+    let selected_model_available = settings
+        .memory
+        .embedding_model
+        .as_ref()
+        .is_none_or(|selected| models.iter().any(|model| model.name == *selected));
+    Ok(Json(ModelsResponse {
+        models,
+        selected_model: settings.memory.embedding_model,
+        selected_model_available,
     }))
 }
 
@@ -403,7 +457,7 @@ async fn generate_character_draft(
         .providers
         .generate_text(
             &settings.provider.active_provider,
-            &effective_ollama_url(&settings, &state),
+            &effective_text_url(&settings, &state),
             &model,
             build_character_draft_messages(&request.prompt, request.alternate_greeting_count),
             generation.clone(),
@@ -419,7 +473,7 @@ async fn generate_character_draft(
                 .providers
                 .generate_text(
                     &settings.provider.active_provider,
-                    &effective_ollama_url(&settings, &state),
+                    &effective_text_url(&settings, &state),
                     &model,
                     build_repair_messages(
                         &request.prompt,
@@ -467,7 +521,7 @@ async fn regenerate_character_draft_field(
         .providers
         .generate_text(
             &settings.provider.active_provider,
-            &effective_ollama_url(&settings, &state),
+            &effective_text_url(&settings, &state),
             &model,
             build_field_regeneration_messages(
                 &request.draft,
@@ -513,17 +567,28 @@ async fn resolve_character_creator_model(
                 "Choose a Character Creator model or a chat model in Settings first."
             ))
         })?;
-    let models = state
+    let capabilities = state
+        .providers
+        .capabilities(&settings.provider.active_provider);
+    let models = match state
         .providers
         .list_models(
             &settings.provider.active_provider,
-            &effective_ollama_url(settings, state),
+            &effective_text_url(settings, state),
         )
         .await
-        .map_err(ApiError::provider)?;
-    if !models.iter().any(|available| available.name == model) {
+    {
+        Ok(models) => models,
+        Err(crate::providers::ProviderError::UnsupportedCapability("model discovery"))
+            if capabilities.manual_model_entry =>
+        {
+            Vec::new()
+        }
+        Err(error) => return Err(ApiError::provider(error)),
+    };
+    if !capabilities.manual_model_entry && !models.iter().any(|available| available.name == model) {
         return Err(ApiError::bad_request(anyhow::anyhow!(
-            "That Character Creator model is not currently available. Refresh Ollama models and choose another one."
+            "That Character Creator model is not currently available. Refresh local models and choose another one."
         )));
     }
     Ok(model)
@@ -807,7 +872,7 @@ async fn generate_chat_response(
     let settings = load_settings(&state.database).await?;
     let selected_model = settings.provider.selected_model.clone().ok_or_else(|| {
         ApiError::bad_request(anyhow::anyhow!(
-            "Choose an Ollama model before sending a message."
+            "Choose a local text model before sending a message."
         ))
     })?;
     let activity = state.resources.try_begin_text().ok_or_else(|| {
@@ -866,7 +931,7 @@ async fn generate_chat_response(
         .iter()
         .map(|entry| entry.content.clone())
         .collect::<Vec<_>>();
-    let base_url = effective_ollama_url(&settings, &state);
+    let base_url = effective_text_url(&settings, &state);
     let upstream = state
         .providers
         .stream_chat(
@@ -925,7 +990,7 @@ async fn generate_chat_response(
                     }
                 }
                 Err(error) => {
-                    warn!(error = ?error, "Ollama streaming request failed");
+                    warn!(error = ?error, "text inference streaming request failed");
                     if let Err(save_error) = persist_completed_assistant_message(
                         &database,
                         &persisted_chat_id,
@@ -1184,8 +1249,8 @@ async fn create_new_memory(
     let vector = state
         .providers
         .embed(
-            &settings.provider.active_provider,
-            &effective_ollama_url(&settings, &state),
+            &settings.memory.embedding_provider,
+            &effective_embedding_url(&settings, &state),
             &model,
             &draft.content,
         )
@@ -1225,8 +1290,8 @@ async fn update_existing_memory(
     let vector = state
         .providers
         .embed(
-            &settings.provider.active_provider,
-            &effective_ollama_url(&settings, &state),
+            &settings.memory.embedding_provider,
+            &effective_embedding_url(&settings, &state),
             &model,
             &draft.content,
         )
@@ -1955,12 +2020,31 @@ async fn remove_replaced_avatar(
     }
 }
 
-fn effective_ollama_url(settings: &AppSettings, state: &AppState) -> String {
-    settings
-        .provider
-        .ollama_base_url
-        .clone()
-        .unwrap_or_else(|| state.default_ollama_base_url.clone())
+fn effective_provider_url(
+    settings: &AppSettings,
+    state: &AppState,
+    provider: &ProviderKind,
+) -> String {
+    match provider {
+        ProviderKind::Ollama => settings
+            .provider
+            .ollama_base_url
+            .clone()
+            .unwrap_or_else(|| state.default_ollama_base_url.clone()),
+        ProviderKind::OpenaiCompatible => settings
+            .provider
+            .openai_compatible_base_url
+            .clone()
+            .unwrap_or_else(|| state.default_openai_compatible_base_url.clone()),
+    }
+}
+
+fn effective_text_url(settings: &AppSettings, state: &AppState) -> String {
+    effective_provider_url(settings, state, &settings.provider.active_provider)
+}
+
+fn effective_embedding_url(settings: &AppSettings, state: &AppState) -> String {
+    effective_provider_url(settings, state, &settings.memory.embedding_provider)
 }
 
 fn effective_a1111_url(settings: &AppSettings, state: &AppState) -> String {
@@ -1996,7 +2080,7 @@ async fn generate_visual_prompt(
         .providers
         .generate_text(
             &settings.provider.active_provider,
-            &effective_ollama_url(settings, state),
+            &effective_text_url(settings, state),
             &model,
             messages,
             settings.generation.clone(),
@@ -2023,7 +2107,11 @@ async fn generate_local_image(
         )));
     }
     let base_url = effective_a1111_url(settings, state);
-    if settings.image.single_gpu_memory_mode {
+    let text_lifecycle_supported = state
+        .providers
+        .capabilities(&settings.provider.active_provider)
+        .model_lifecycle;
+    if settings.image.single_gpu_memory_mode && text_lifecycle_supported {
         if let Some(model) = settings
             .image
             .image_prompt_model
@@ -2035,7 +2123,7 @@ async fn generate_local_image(
                 .providers
                 .unload_model(
                     &settings.provider.active_provider,
-                    &effective_ollama_url(settings, state),
+                    &effective_text_url(settings, state),
                     model,
                 )
                 .await
@@ -2043,6 +2131,8 @@ async fn generate_local_image(
                 warn!(error = ?error, "could not unload text model before image generation");
             }
         }
+    } else if settings.image.single_gpu_memory_mode {
+        info!("configured text backend has no model lifecycle API; skipping text-model unload before image generation");
     }
     let (width, height) = match kind {
         ImageDimensions::Avatar => (settings.image.avatar_width, settings.image.avatar_height),
@@ -2069,13 +2159,13 @@ async fn generate_local_image(
         if let Err(error) = state.image_providers.release_memory(&base_url).await {
             warn!(error = ?error, "image generation succeeded but A1111 cleanup was unavailable");
         }
-        if settings.image.restore_text_model_after_generation {
+        if settings.image.restore_text_model_after_generation && text_lifecycle_supported {
             if let Some(model) = settings.provider.selected_model.as_deref() {
                 if let Err(error) = state
                     .providers
                     .preload_model(
                         &settings.provider.active_provider,
-                        &effective_ollama_url(settings, state),
+                        &effective_text_url(settings, state),
                         model,
                     )
                     .await
@@ -2083,6 +2173,8 @@ async fn generate_local_image(
                     warn!(error = ?error, "image generation succeeded but chat model restore failed");
                 }
             }
+        } else if settings.image.restore_text_model_after_generation {
+            info!("configured text backend has no model lifecycle API; skipping text-model preload after image generation");
         }
     }
     Ok(generated)
@@ -2096,7 +2188,13 @@ fn settings_response(settings: &AppSettings, state: &AppState) -> SettingsRespon
         persona: settings.persona.clone(),
         image: settings.image.clone(),
         memory: settings.memory.clone(),
-        effective_ollama_base_url: effective_ollama_url(settings, state),
+        effective_ollama_base_url: effective_provider_url(settings, state, &ProviderKind::Ollama),
+        effective_openai_compatible_base_url: effective_provider_url(
+            settings,
+            state,
+            &ProviderKind::OpenaiCompatible,
+        ),
+        effective_text_base_url: effective_text_url(settings, state),
         effective_a1111_base_url: effective_a1111_url(settings, state),
         capabilities: state
             .providers
@@ -2130,6 +2228,8 @@ struct SettingsResponse {
     image: crate::domain::settings::ImageSettings,
     memory: crate::domain::settings::MemorySettings,
     effective_ollama_base_url: String,
+    effective_openai_compatible_base_url: String,
+    effective_text_base_url: String,
     effective_a1111_base_url: String,
     capabilities: crate::providers::ProviderCapabilities,
 }
@@ -2413,16 +2513,17 @@ mod tests {
         let settings = AppSettings::default();
         let state = AppState::new(
             sqlx::SqlitePool::connect_lazy("sqlite::memory:").expect("pool"),
-            crate::providers::ProviderService::new().expect("provider service"),
+            crate::providers::ProviderService::new(None).expect("provider service"),
             crate::providers::ImageProviderService::new().expect("image provider service"),
             "http://from-environment:11434".to_owned(),
+            "http://from-environment:8080/v1".to_owned(),
             PathBuf::from("./avatars"),
             "http://from-environment:7860".to_owned(),
             PathBuf::from("./images"),
         );
 
         assert_eq!(
-            effective_ollama_url(&settings, &state),
+            effective_text_url(&settings, &state),
             "http://from-environment:11434"
         );
     }
@@ -2446,17 +2547,46 @@ mod tests {
         settings.provider.ollama_base_url = Some("http://saved-server:11434".to_owned());
         let state = AppState::new(
             sqlx::SqlitePool::connect_lazy("sqlite::memory:").expect("pool"),
-            crate::providers::ProviderService::new().expect("provider service"),
+            crate::providers::ProviderService::new(None).expect("provider service"),
             crate::providers::ImageProviderService::new().expect("image provider service"),
             "http://from-environment:11434".to_owned(),
+            "http://from-environment:8080/v1".to_owned(),
             PathBuf::from("./avatars"),
             "http://from-environment:7860".to_owned(),
             PathBuf::from("./images"),
         );
 
         assert_eq!(
-            effective_ollama_url(&settings, &state),
+            effective_text_url(&settings, &state),
             "http://saved-server:11434"
+        );
+    }
+
+    #[tokio::test]
+    async fn text_and_embedding_backends_can_use_independent_urls() {
+        let mut settings = AppSettings::default();
+        settings.provider.active_provider = ProviderKind::OpenaiCompatible;
+        settings.provider.openai_compatible_base_url = Some("http://text.local:8080/v1".to_owned());
+        settings.memory.embedding_provider = ProviderKind::Ollama;
+        settings.provider.ollama_base_url = Some("http://embeddings.local:11434".to_owned());
+        let state = AppState::new(
+            sqlx::SqlitePool::connect_lazy("sqlite::memory:").expect("pool"),
+            crate::providers::ProviderService::new(None).expect("provider service"),
+            crate::providers::ImageProviderService::new().expect("image provider service"),
+            "http://from-environment:11434".to_owned(),
+            "http://from-environment:8080/v1".to_owned(),
+            PathBuf::from("./avatars"),
+            "http://from-environment:7860".to_owned(),
+            PathBuf::from("./images"),
+        );
+
+        assert_eq!(
+            effective_text_url(&settings, &state),
+            "http://text.local:8080/v1"
+        );
+        assert_eq!(
+            effective_embedding_url(&settings, &state),
+            "http://embeddings.local:11434"
         );
     }
 
@@ -2466,9 +2596,10 @@ mod tests {
         settings.image.a1111_base_url = Some("http://saved-image-server:7860".to_owned());
         let state = AppState::new(
             sqlx::SqlitePool::connect_lazy("sqlite::memory:").expect("pool"),
-            crate::providers::ProviderService::new().expect("provider service"),
+            crate::providers::ProviderService::new(None).expect("provider service"),
             crate::providers::ImageProviderService::new().expect("image provider service"),
             "http://from-environment:11434".to_owned(),
+            "http://from-environment:8080/v1".to_owned(),
             PathBuf::from("./avatars"),
             "http://from-environment:7860".to_owned(),
             PathBuf::from("./images"),

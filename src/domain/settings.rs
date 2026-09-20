@@ -26,10 +26,12 @@ pub struct AppearanceSettings {
     pub muted_text: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum ProviderKind {
+    #[default]
     Ollama,
+    OpenaiCompatible,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -38,6 +40,9 @@ pub struct ProviderSettings {
     pub active_provider: ProviderKind,
     /// None means use the OLLAMA_BASE_URL environment default.
     pub ollama_base_url: Option<String>,
+    /// None means use the OPENAI_COMPATIBLE_BASE_URL environment default.
+    /// Credentials stay environment-only and never reach browser settings.
+    pub openai_compatible_base_url: Option<String>,
     pub selected_model: Option<String>,
     /// Optional local model dedicated to producing structured character drafts.
     /// When absent, NyxAI falls back to the selected chat model.
@@ -84,6 +89,8 @@ pub struct MemorySettings {
     pub enabled: bool,
     pub automatic_extraction: bool,
     pub embedding_model: Option<String>,
+    /// May remain Ollama while text generation uses another local backend.
+    pub embedding_provider: ProviderKind,
     pub extraction_model: Option<String>,
     pub extraction_interval: u32,
     pub retrieval_count: u32,
@@ -111,6 +118,7 @@ impl Default for ProviderSettings {
         Self {
             active_provider: ProviderKind::Ollama,
             ollama_base_url: None,
+            openai_compatible_base_url: None,
             selected_model: None,
             character_creator_model: None,
         }
@@ -154,6 +162,7 @@ impl Default for MemorySettings {
             enabled: false,
             automatic_extraction: true,
             embedding_model: None,
+            embedding_provider: ProviderKind::Ollama,
             extraction_model: None,
             extraction_interval: 8,
             retrieval_count: 4,
@@ -188,8 +197,14 @@ impl AppSettings {
             bail!("Colors must use the #RRGGBB format.");
         }
 
-        if let Some(url) = &self.provider.ollama_base_url {
-            validate_ollama_url(url)?;
+        for url in [
+            &self.provider.ollama_base_url,
+            &self.provider.openai_compatible_base_url,
+        ]
+        .into_iter()
+        .flatten()
+        {
+            validate_provider_url(url)?;
         }
 
         if let Some(model) = &self.provider.selected_model {
@@ -389,11 +404,11 @@ pub fn normalize_hex_color(value: &str) -> Option<String> {
     None
 }
 
-fn validate_ollama_url(value: &str) -> Result<()> {
-    let parsed =
-        Url::parse(value.trim()).map_err(|_| anyhow::anyhow!("Enter a valid Ollama URL."))?;
+fn validate_provider_url(value: &str) -> Result<()> {
+    let parsed = Url::parse(value.trim())
+        .map_err(|_| anyhow::anyhow!("Enter a valid local inference server URL."))?;
     if !matches!(parsed.scheme(), "http" | "https") || parsed.host_str().is_none() {
-        bail!("Enter a valid Ollama URL using http:// or https://.");
+        bail!("Enter a valid local inference server URL using http:// or https://.");
     }
 
     Ok(())
@@ -427,6 +442,17 @@ mod tests {
         let mut settings = AppSettings::default();
         settings.provider.ollama_base_url = Some("ollama.example".to_owned());
         assert!(settings.validate().is_err());
+    }
+
+    #[test]
+    fn older_settings_default_to_ollama_for_text_and_embeddings() {
+        let settings: AppSettings = serde_json::from_value(serde_json::json!({
+            "provider": { "ollama_base_url": "http://127.0.0.1:11434" },
+            "memory": { "enabled": true, "embedding_model": "nomic-embed-text" }
+        }))
+        .expect("older settings should deserialize");
+        assert_eq!(settings.provider.active_provider, ProviderKind::Ollama);
+        assert_eq!(settings.memory.embedding_provider, ProviderKind::Ollama);
     }
 
     #[test]

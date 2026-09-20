@@ -31,7 +31,8 @@ async fn main() -> anyhow::Result<()> {
     let database = Database::connect(&config.database_location)
         .await
         .context("failed to initialize the NyxAI database")?;
-    let providers = ProviderService::new().context("failed to initialize AI provider service")?;
+    let providers = ProviderService::new(config.openai_compatible_api_key.clone())
+        .context("failed to initialize AI provider service")?;
     let image_providers =
         ImageProviderService::new().context("failed to initialize image provider service")?;
     let app = router(AppState::new(
@@ -39,6 +40,7 @@ async fn main() -> anyhow::Result<()> {
         providers,
         image_providers,
         config.ollama_base_url.clone(),
+        config.openai_compatible_base_url.clone(),
         config.avatar_directory.clone(),
         config.a1111_base_url.clone(),
         config.image_directory.clone(),

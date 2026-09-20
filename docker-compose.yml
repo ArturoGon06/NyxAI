@@ -9,6 +9,8 @@ services:
       NYXAI_DATABASE_URL: "${NYXAI_DATABASE_URL:-/data/nyxai.db}"
       NYXAI_ASSET_DIR: "${NYXAI_ASSET_DIR:-/data/avatars}"
       OLLAMA_BASE_URL: "${OLLAMA_BASE_URL:-http://localhost:11434}"
+      OPENAI_COMPATIBLE_BASE_URL: "${OPENAI_COMPATIBLE_BASE_URL:-http://localhost:8080/v1}"
+      OPENAI_COMPATIBLE_API_KEY: "${OPENAI_COMPATIBLE_API_KEY:-}"
       A1111_BASE_URL: "${A1111_BASE_URL:-http://localhost:7860}"
       NYXAI_IMAGE_DIR: "${NYXAI_IMAGE_DIR:-/data/images}"
     volumes:

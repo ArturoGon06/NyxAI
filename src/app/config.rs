@@ -9,6 +9,7 @@ pub const DEFAULT_PORT: u16 = 8000;
 pub const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
 const DEFAULT_DATABASE_LOCATION: &str = "./data/nyxai.db";
 pub const DEFAULT_OLLAMA_BASE_URL: &str = "http://localhost:11434";
+pub const DEFAULT_OPENAI_COMPATIBLE_BASE_URL: &str = "http://localhost:8080/v1";
 pub const DEFAULT_A1111_BASE_URL: &str = "http://localhost:7860";
 
 /// Runtime configuration intentionally stays small until a feature needs more.
@@ -16,6 +17,9 @@ pub struct AppConfig {
     pub port: u16,
     pub database_location: String,
     pub ollama_base_url: String,
+    pub openai_compatible_base_url: String,
+    /// Never log this value or return it through settings routes.
+    pub openai_compatible_api_key: Option<String>,
     pub avatar_directory: PathBuf,
     pub a1111_base_url: String,
     pub image_directory: PathBuf,
@@ -50,6 +54,15 @@ impl AppConfig {
         if ollama_base_url.trim().is_empty() {
             bail!("OLLAMA_BASE_URL cannot be empty");
         }
+
+        let openai_compatible_base_url = env::var("OPENAI_COMPATIBLE_BASE_URL")
+            .unwrap_or_else(|_| DEFAULT_OPENAI_COMPATIBLE_BASE_URL.to_owned());
+        if openai_compatible_base_url.trim().is_empty() {
+            bail!("OPENAI_COMPATIBLE_BASE_URL cannot be empty");
+        }
+        let openai_compatible_api_key = env::var("OPENAI_COMPATIBLE_API_KEY")
+            .ok()
+            .filter(|value| !value.trim().is_empty());
 
         let avatar_directory = env::var("NYXAI_ASSET_DIR")
             .map(PathBuf::from)
@@ -100,6 +113,8 @@ impl AppConfig {
             port,
             database_location,
             ollama_base_url,
+            openai_compatible_base_url,
+            openai_compatible_api_key,
             avatar_directory,
             a1111_base_url,
             image_directory,
@@ -130,7 +145,10 @@ fn default_avatar_directory(database_location: &str) -> PathBuf {
 
 #[cfg(test)]
 mod tests {
-    use super::{APP_VERSION, DEFAULT_A1111_BASE_URL, DEFAULT_OLLAMA_BASE_URL, DEFAULT_PORT};
+    use super::{
+        APP_VERSION, DEFAULT_A1111_BASE_URL, DEFAULT_OLLAMA_BASE_URL,
+        DEFAULT_OPENAI_COMPATIBLE_BASE_URL, DEFAULT_PORT,
+    };
 
     #[test]
     fn default_port_matches_public_deployment_contract() {
@@ -140,6 +158,14 @@ mod tests {
     #[test]
     fn default_ollama_address_is_a_local_development_server() {
         assert_eq!(DEFAULT_OLLAMA_BASE_URL, "http://localhost:11434");
+    }
+
+    #[test]
+    fn default_openai_compatible_address_is_a_local_development_server() {
+        assert_eq!(
+            DEFAULT_OPENAI_COMPATIBLE_BASE_URL,
+            "http://localhost:8080/v1"
+        );
     }
 
     #[test]

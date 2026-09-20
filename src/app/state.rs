@@ -77,6 +77,7 @@ pub struct AppState {
     /// This is the environment-provided fallback. A saved application setting
     /// takes precedence so a user can change servers from the NyxAI UI.
     pub default_ollama_base_url: String,
+    pub default_openai_compatible_base_url: String,
     /// Persistent storage for user-provided character avatars.
     pub avatar_directory: PathBuf,
     pub default_a1111_base_url: String,
@@ -84,11 +85,17 @@ pub struct AppState {
 }
 
 impl AppState {
+    // AppState construction happens once at the application boundary. Keeping
+    // the independently configurable storage locations and backend defaults
+    // explicit makes startup wiring auditable without adding a mutable config
+    // bag to request state.
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         database: SqlitePool,
         providers: ProviderService,
         image_providers: ImageProviderService,
         default_ollama_base_url: String,
+        default_openai_compatible_base_url: String,
         avatar_directory: PathBuf,
         default_a1111_base_url: String,
         image_directory: PathBuf,
@@ -99,6 +106,7 @@ impl AppState {
             image_providers,
             resources: Arc::new(AIResourceCoordinator::default()),
             default_ollama_base_url,
+            default_openai_compatible_base_url,
             avatar_directory,
             default_a1111_base_url,
             image_directory,

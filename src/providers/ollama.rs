@@ -1,5 +1,6 @@
 use std::pin::Pin;
 
+use async_trait::async_trait;
 use futures_util::{Stream, StreamExt};
 use reqwest::{Client, StatusCode};
 use serde::{Deserialize, Serialize};
@@ -7,7 +8,10 @@ use url::Url;
 
 use crate::{
     domain::{conversation::ConversationMessage, settings::GenerationSettings},
-    providers::{ProviderError, ProviderModel, StreamingChunk},
+    providers::{
+        EmbeddingProvider, ModelLifecycleProvider, ModelProvider, ProviderError, ProviderModel,
+        ProviderStream, StreamingChunk, TextGenerationProvider,
+    },
 };
 
 #[derive(Clone)]
@@ -225,6 +229,49 @@ impl OllamaProvider {
     }
 }
 
+#[async_trait]
+impl ModelProvider for OllamaProvider {
+    async fn list_models(&self, base_url: &str) -> Result<Vec<ProviderModel>, ProviderError> {
+        OllamaProvider::list_models(self, base_url).await
+    }
+}
+
+#[async_trait]
+impl TextGenerationProvider for OllamaProvider {
+    async fn stream_chat(
+        &self,
+        base_url: &str,
+        model: &str,
+        messages: Vec<ConversationMessage>,
+        generation: GenerationSettings,
+    ) -> Result<ProviderStream, ProviderError> {
+        OllamaProvider::stream_chat(self, base_url, model, messages, generation).await
+    }
+}
+
+#[async_trait]
+impl EmbeddingProvider for OllamaProvider {
+    async fn embed(
+        &self,
+        base_url: &str,
+        model: &str,
+        input: &str,
+    ) -> Result<Vec<f32>, ProviderError> {
+        OllamaProvider::embed(self, base_url, model, input).await
+    }
+}
+
+#[async_trait]
+impl ModelLifecycleProvider for OllamaProvider {
+    async fn unload_model(&self, base_url: &str, model: &str) -> Result<(), ProviderError> {
+        OllamaProvider::unload_model(self, base_url, model).await
+    }
+
+    async fn preload_model(&self, base_url: &str, model: &str) -> Result<(), ProviderError> {
+        OllamaProvider::preload_model(self, base_url, model).await
+    }
+}
+
 fn api_endpoint(base_url: &str, path: &str) -> Result<Url, ProviderError> {
     let mut base = Url::parse(base_url.trim()).map_err(|_| ProviderError::InvalidUrl)?;
     if !matches!(base.scheme(), "http" | "https") || base.host_str().is_none() {
@@ -255,8 +302,10 @@ async fn ensure_success(response: reqwest::Response) -> Result<reqwest::Response
     }
 
     let status = response.status().as_u16();
-    let detail = response.text().await.unwrap_or_default();
-    Err(ProviderError::Rejected { status, detail })
+    // Do not retain arbitrary backend bodies in provider errors. They may be
+    // noisy, private, or include implementation details unsuitable for logs.
+    let _ = response.bytes().await;
+    Err(ProviderError::Rejected { status })
 }
 
 fn validate_embedding_vector(vector: Vec<f32>) -> Result<Vec<f32>, ProviderError> {

@@ -28,6 +28,7 @@ ENV NYXAI_PORT=8000
 ENV NYXAI_DATABASE_URL=/data/nyxai.db
 ENV NYXAI_ASSET_DIR=/data/avatars
 ENV OLLAMA_BASE_URL=http://localhost:11434
+ENV OPENAI_COMPATIBLE_BASE_URL=http://localhost:8080/v1
 ENV A1111_BASE_URL=http://localhost:7860
 ENV NYXAI_IMAGE_DIR=/data/images
 
